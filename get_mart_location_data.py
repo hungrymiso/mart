@@ -42,6 +42,8 @@ def search_places_with_sido_names(query, sido_names):
 def get_homeplus_places(sido_names):
     
     def is_homeplus_place_name(name):
+        if any([x in name for x in ['스페셜']]):
+            return False
         if '익스프레스' in name:
             return False
         if '홈플러스' not in name:
