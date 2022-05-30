@@ -1,0 +1,337 @@
+뉴욕 택시 데이터 살펴보기
+질문: 2015년 옐로캡 택시의 월별 운행 횟수는 모두 몇 번일까요?
+
+쿼리 작성 버튼을 클릭하고 다음을 새 쿼리 필드에 추가합니다.
+
+#standardSQL
+SELECT
+  TIMESTAMP_TRUNC(pickup_datetime,
+    MONTH) month,
+  COUNT(*) trips
+FROM
+  `bigquery-public-data.new_york.tlc_yellow_trips_2015`
+GROUP BY
+  1
+ORDER BY
+  1
+그런 다음 쿼리 실행을 클릭합니다.
+
+그러면 다음과 같은 결과가 표시됩니다.
+
+BQML_taxi_mo_trips
+
+완료된 작업 테스트하기
+진행 상황 확인을 클릭하여 실행한 작업을 확인합니다. 작업을 올바르게 완료하면 평가 점수가 부여됩니다.
+
+2015년의 옐로캡 운행 횟수를 월별로 계산하기
+질문: 2015년 옐로캡 택시의 평균 속도는 얼마인가요?
+
+이전 쿼리를 다음으로 대체한 다음 쿼리를 실행합니다.
+
+#standardSQL
+SELECT
+  EXTRACT(HOUR
+  FROM
+    pickup_datetime) hour,
+  ROUND(AVG(trip_distance / TIMESTAMP_DIFF(dropoff_datetime,
+        pickup_datetime,
+        SECOND))*3600, 1) speed
+FROM
+  `bigquery-public-data.new_york.tlc_yellow_trips_2015`
+WHERE
+  trip_distance > 0
+  AND fare_amount/trip_distance BETWEEN 2
+  AND 10
+  AND dropoff_datetime > pickup_datetime
+GROUP BY
+  1
+ORDER BY
+  1
+그러면 다음과 같은 결과가 표시됩니다.
+
+BQML_taxi_hr_speed
+
+낮 동안 평균 속도는 약 11~12MPH이지만, 오전 5시 평균 속도는 거의 두 배인 21MPH를 기록했습니다. 직관적으로 바로 이해하실 수 있겠지만, 이는 새벽 5시에 도로의 교통량이 적을 가능성이 높기 때문입니다.
+
+완료된 작업 테스트하기
+진행 상황 확인을 클릭하여 실행한 작업을 확인합니다. 작업을 올바르게 완료하면 평가 점수가 부여됩니다.
+
+2015년 옐로캡 택시 평균 운행 속도 계산하기
+목표 파악하기
+이제 BigQuery에서 머신러닝 모델을 만들어 주어진 과거 운행 데이터세트와 운행 데이터를 바탕으로 뉴욕 옐로캡 택시 운행 요금을 예측하게 됩니다. 운행 전에 요금을 예측하는 작업은 승객과 택시 회사 모두 운행을 계획하는 데 매우 유용합니다.
+
+특성 선택 및 학습 데이터세트 만들기
+뉴욕 옐로캡 데이터세트는 시에서 제공하는 공개 데이터세트이며, 사용자가 탐색할 수 있도록 BigQuery에 로드되었습니다. 여기에서 전체 필드 목록을 둘러본 다음 데이터세트를 미리 보고, 머신러닝 모델이 과거 택시 운행 데이터와 운행 요금 간의 관계를 이해하는 데 도움이 되는 유용한 특성을 찾습니다.
+
+팀에서 아래 필드가 요금 예측 모델에 적합한 입력인지에 대한 테스트 여부를 결정합니다.
+
+통행 요금
+요금
+시간
+승차 주소
+하차 주소
+승객 수
+다음으로 쿼리를 대체합니다.
+
+#standardSQL
+WITH params AS (
+    SELECT
+    1 AS TRAIN,
+    2 AS EVAL
+    ),
+  daynames AS
+    (SELECT ['Sun', 'Mon', 'Tues', 'Wed', 'Thurs', 'Fri', 'Sat'] AS daysofweek),
+  taxitrips AS (
+  SELECT
+    (tolls_amount + fare_amount) AS total_fare,
+    daysofweek[ORDINAL(EXTRACT(DAYOFWEEK FROM pickup_datetime))] AS dayofweek,
+    EXTRACT(HOUR FROM pickup_datetime) AS hourofday,
+    pickup_longitude AS pickuplon,
+    pickup_latitude AS pickuplat,
+    dropoff_longitude AS dropofflon,
+    dropoff_latitude AS dropofflat,
+    passenger_count AS passengers
+  FROM
+    `nyc-tlc.yellow.trips`, daynames, params
+  WHERE
+    trip_distance > 0 AND fare_amount > 0
+    AND MOD(ABS(FARM_FINGERPRINT(CAST(pickup_datetime AS STRING))),1000) = params.TRAIN
+  )
+  SELECT *
+  FROM taxitrips
+쿼리에 대해 몇 가지 참고할 사항이 있습니다.
+
+쿼리의 주요 부분은 쿼리 하단(SELECT * from taxitrips)에 있습니다.
+taxitrips는 학습 기능과 라벨이 포함된 SELECT를 사용하여 뉴욕 데이터세트의 대량 추출을 수행합니다.
+WHERE는 학습시키고 싶지 않은 데이터를 제거합니다.
+또한 WHERE에는 데이터의 1/1000만 가져오기 위한 샘플링 절이 포함되어 있습니다.
+BigQuery에서는 독립적인 EVAL 세트를 빠르게 만들 수 있도록 TRAIN이라는 변수를 정의합니다.
+그런 다음 쿼리를 실행합니다.
+
+샘플 결과는 다음과 같습니다.
+
+3784193f53252195
+
+여기에서 라벨은 무엇인가요(정답)?
+
+total_fare가 우리가 예측하게 될 라벨입니다. tolls_amount 및 fare_amount를 바탕으로 이 필드가 생성됩니다. 모델의 일부인 고객 팁은 임의 항목이므로 무시할 수 있습니다.
+
+완료된 작업 테스트하기
+진행 상황 확인을 클릭하여 실행한 작업을 확인합니다. 작업을 올바르게 완료하면 평가 점수가 부여됩니다.
+
+필드가 요금 예측 모델에 적합한 입력인지 테스트하기
+모델을 저장할 BigQuery 데이터세트 만들기
+다음으로 ML 모델을 저장할 새 BigQuery 데이터세트를 만듭니다.
+
+리소스 패널에서 프로젝트 이름을 선택합니다.
+
+데이터세트 만들기를 선택합니다.
+
+데이터세트 만들기 대화상자에서 다음을 수행합니다.
+
+데이터세트 ID에 taxi를 입력합니다.
+
+다른 값은 기본값을 유지합니다.
+
+데이터세트 만들기를 클릭합니다.
+
+완료된 작업 테스트하기
+진행 상황 확인을 클릭하여 실행한 작업을 확인합니다. 작업을 올바르게 완료하면 평가 점수가 부여됩니다.
+
+모델을 저장할 BigQuery 데이터세트 만들기
+BQML 모델 유형 선택 및 옵션 지정하기
+최초 특성을 선택했으므로 이제 BigQuery에서 첫 번째 ML 모델을 만들 수 있습니다.
+
+다음과 같은 몇 가지 모델 유형 중에서 선택할 수 있습니다.
+
+모델
+
+모델 유형
+
+라벨 데이터 유형
+
+예
+
+예측
+
+linear_reg
+
+숫자 값(보통 정수 또는 부동 소수점)
+
+과거 매출 데이터를 바탕으로 내년 매출 수치를 예측합니다.
+
+이진 분류
+
+logistic_reg
+
+이진 분류를 위한 0 또는 1
+
+컨텍스트를 바탕으로 이메일을 일반 또는 스팸으로 분류합니다.
+
+다중 클래스 분류
+
+logistic_reg
+
+입력이 '낮은 값', '중간 값', '높은 값' 중 무엇인지와 같이, 가능한 여러 값을 예측하는 데 이러한 모델을 사용할 수 있습니다. 라벨은 최대 50개의 고유값을 가질 수 있습니다.
+
+이메일을 스팸, 일반 우선순위 또는 중요도 높음으로 분류합니다.
+
+참고: 머신러닝에 사용되는 다수의 추가 모델 유형(예: 신경망 또는 결정 트리) 이 있으며, TensorFlow 등의 라이브러리를 사용할 수 있습니다. 현재 BQML에서는 위에 나열된 세 모델을 지원합니다. 자세한 내용은 BQML 로드맵을 참고하세요.
+
+Which model type should you choose for predicting taxi cab fare (numeric value)?
+
+SQL
+
+Multiclass Classification
+
+Binary Classification
+
+Linear Regression
+
+다음 쿼리를 입력하여 모델을 만들고 모델 옵션을 지정합니다. 이때 -- paste the previous training dataset query here 부분을 이전에 만든 학습 데이터세트 쿼리로 대체합니다(#standardSQL 행 생략).
+
+#standardSQL
+CREATE or REPLACE MODEL taxi.taxifare_model
+OPTIONS
+  (model_type='linear_reg', labels=['total_fare']) AS
+-- paste the previous training dataset query here
+그런 다음 쿼리 실행을 클릭하여 모델을 학습시킵니다.
+
+모델이 학습을 마칠 때까지 기다립니다(5~10분).
+
+모델이 학습된 후 "이 명령문은 qwiklabs-gcp-03-xxxxxxxx:taxi.taxifare_model이라는 새 모델을 생성합니다."라는 메시지가 표시됩니다. 이는 모델이 성공적으로 학습되었음을 나타냅니다.
+
+택시 데이터세트 내에 taxifare_model이 표시되어 있는지 확인합니다.
+
+이제 입력되지 않은 새 평가 데이터를 기반으로 모델 성능을 평가하게 됩니다.
+
+완료된 작업 테스트하기
+진행 상황 확인을 클릭하여 실행한 작업을 확인합니다. 작업을 올바르게 완료하면 평가 점수가 부여됩니다.
+
+택시 요금 모델 만들기
+분류 모델 성능 평가하기
+성능 기준 선택하기
+선형 회귀 모델의 경우 RMSE(평균 제곱근 오차)와 같은 손실 측정항목을 사용하는 것이 좋으며, RMSE가 가장 낮아질 때까지 계속해서 모델을 학습시키고 개선해야 합니다.
+
+BQML에서 mean_squared_error는 학습시킨 ML 모델을 평가할 때 쿼리 가능한 필드입니다. SQRT()를 추가하여 RMSE를 가져옵니다.
+
+이제 학습이 완료되었으므로, ML.EVALUATE를 사용하여 이 쿼리에서 모델 성능이 어떻게 나타나는지 평가할 수 있습니다.
+
+#standardSQL
+SELECT
+  SQRT(mean_squared_error) AS rmse
+FROM
+  ML.EVALUATE(MODEL taxi.taxifare_model,
+  (
+  WITH params AS (
+    SELECT
+    1 AS TRAIN,
+    2 AS EVAL
+    ),
+  daynames AS
+    (SELECT ['Sun', 'Mon', 'Tues', 'Wed', 'Thurs', 'Fri', 'Sat'] AS daysofweek),
+  taxitrips AS (
+  SELECT
+    (tolls_amount + fare_amount) AS total_fare,
+    daysofweek[ORDINAL(EXTRACT(DAYOFWEEK FROM pickup_datetime))] AS dayofweek,
+    EXTRACT(HOUR FROM pickup_datetime) AS hourofday,
+    pickup_longitude AS pickuplon,
+    pickup_latitude AS pickuplat,
+    dropoff_longitude AS dropofflon,
+    dropoff_latitude AS dropofflat,
+    passenger_count AS passengers
+  FROM
+    `nyc-tlc.yellow.trips`, daynames, params
+  WHERE
+    trip_distance > 0 AND fare_amount > 0
+    AND MOD(ABS(FARM_FINGERPRINT(CAST(pickup_datetime AS STRING))),1000) = params.EVAL
+  )
+  SELECT *
+  FROM taxitrips
+  ))
+이제 params.EVAL 필터를 사용하여 다양한 택시 운행 세트를 기반으로 모델을 평가합니다.
+
+모델이 실행된 후 모델 결과를 검토합니다(모델 RMSE 값은 약간 다를 수 있음).
+
+행
+
+RMSE
+
+1
+
+9.477056435999074
+
+모델을 평가하면 $9.47의 RMSE가 반환됩니다. 모델을 활용하는 데 이러한 손실 측정항목이 적절한지 파악하는 것은 전적으로 모델 학습이 시작되기 전에 설정되는 벤치마크 기준에 달려 있습니다. 벤치마킹에서 허용 가능한 모델 성능 및 정확도의 최소 수준을 정합니다.
+
+완료된 작업 테스트하기
+진행 상황 확인을 클릭하여 실행한 작업을 확인합니다. 작업을 올바르게 완료하면 평가 점수가 부여됩니다.
+
+분류 모델 성능 평가하기
+학습 손실과 평가 손실 비교하기
+데이터에 대한 모델의 과적합 여부를 확인하는 것이 좋습니다. 모델에 과적합이 발생하면 입력되지 않은 새 데이터에 대한 성능이 저하됩니다. ML.TRAINING_INFO를 사용하여 학습 손실을 평가 손실과 비교할 수 있습니다.
+
+SELECT * FROM ML.TRAINING_INFO(model `taxi.taxifare_model`);
+이렇게 하면 모델 학습의 각 반복 실행에서 얻은 모든 정보가 선택됩니다. 여기에는 학습 반복 횟수, 학습 손실 및 평가 손실이 포함됩니다. 학습 손실과 평가 손실을 비교하기 위해 손실 곡선의 차이를 시각적으로 살펴보겠습니다. explore-in-data-studio을(를) 클릭합니다. 그러면 쿼리의 데이터가 입력 소스로 연결된 데이터 스튜디오가 열립니다.
+
+데이터 스튜디오에서 콤보 차트 아이콘을 클릭합니다.
+
+data-studio-charts
+
+측정기준에서 반복 위로 드래그합니다. 측정항목에서 loss 및 eval_loss 위로 드래그합니다. 그러면 막대 그래프 위에 선 차트가 겹쳐진 차트가 표시됩니다.
+
+BQML 손실
+
+학습 손실이 평가 손실과 거의 동일하면 모델에 과적합이 발생하지 않은 것이므로 좋은 상태인 것입니다. 이제 예측으로 넘어가 보겠습니다.
+
+택시 요금 예측하기
+이제 새 모델을 사용하여 예측을 수행하기 위한 쿼리를 작성하게 됩니다.
+
+#standardSQL
+SELECT
+*
+FROM
+  ml.PREDICT(MODEL `taxi.taxifare_model`,
+   (
+ WITH params AS (
+    SELECT
+    1 AS TRAIN,
+    2 AS EVAL
+    ),
+  daynames AS
+    (SELECT ['Sun', 'Mon', 'Tues', 'Wed', 'Thurs', 'Fri', 'Sat'] AS daysofweek),
+  taxitrips AS (
+  SELECT
+    (tolls_amount + fare_amount) AS total_fare,
+    daysofweek[ORDINAL(EXTRACT(DAYOFWEEK FROM pickup_datetime))] AS dayofweek,
+    EXTRACT(HOUR FROM pickup_datetime) AS hourofday,
+    pickup_longitude AS pickuplon,
+    pickup_latitude AS pickuplat,
+    dropoff_longitude AS dropofflon,
+    dropoff_latitude AS dropofflat,
+    passenger_count AS passengers
+  FROM
+    `nyc-tlc.yellow.trips`, daynames, params
+  WHERE
+    trip_distance > 0 AND fare_amount > 0
+    AND MOD(ABS(FARM_FINGERPRINT(CAST(pickup_datetime AS STRING))),1000) = params.EVAL
+  )
+  SELECT *
+  FROM taxitrips
+));
+그러면 택시 요금에 대한 모델의 예측과 함께 실제 요금, 운행과 관련된 기타 특성이 표시됩니다.
+
+완료된 작업 테스트하기
+진행 상황 확인을 클릭하여 실행한 작업을 확인합니다. 작업을 올바르게 완료하면 평가 점수가 부여됩니다.
+
+택시 요금 예측하기
+아래와 비슷한 결과가 나와야 합니다.
+
+taxi-predict
+
+추가 정보
+팁: 기존 모델에 새 데이터를 다시 학습시켜 학습 시간을 단축하고 싶은 경우에는 모델 옵션에 warm_start = true를 추가하세요. 특성 열은 변경할 수 없다는 점에 유의하세요. 특성 열을 변경하려면 새 모델이 필요합니다.
+
+살펴볼 다른 데이터세트
+시카고 택시 운행 요금 예측과 같은 다른 데이터세트에 대한 모델링을 살펴보고 싶은 경우, 아래 링크를 사용하여 bigquery-public-data 프로젝트를 가져올 수 있습니다.
+
+https://bigquery.cloud.google.com/table/bigquery-public-data::chicago_taxi_trips.taxi_trips
