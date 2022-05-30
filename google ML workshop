@@ -1,0 +1,67 @@
+#사용된 공개 데이터세트 주소 https://cloud.google.com/bigquery/public-data
+
+
+#standardSQL 질문: 2015년 옐로캡 택시의 평균 속도는 얼마인가요?
+SELECT
+  EXTRACT(HOUR
+  FROM
+    pickup_datetime) hour,
+  ROUND(AVG(trip_distance / TIMESTAMP_DIFF(dropoff_datetime,
+        pickup_datetime,
+        SECOND))*3600, 1) speed
+FROM
+  `bigquery-public-data.new_york.tlc_yellow_trips_2015`
+WHERE
+  trip_distance > 0
+  AND fare_amount/trip_distance BETWEEN 2
+  AND 10
+  AND dropoff_datetime > pickup_datetime
+GROUP BY
+  1
+ORDER BY
+  1
+
+
+#standardSQL질문: 2015년 옐로캡 택시의 월별 운행 횟수는 모두 몇 번일까요?
+SELECT
+  EXTRACT(HOUR
+  FROM
+    pickup_datetime) hour,
+  ROUND(AVG(trip_distance / TIMESTAMP_DIFF(dropoff_datetime,
+        pickup_datetime,
+        SECOND))*3600, 1) speed
+FROM
+  `bigquery-public-data.new_york.tlc_yellow_trips_2015`
+WHERE
+  trip_distance > 0
+  AND fare_amount/trip_distance BETWEEN 2
+  AND 10
+  AND dropoff_datetime > pickup_datetime
+GROUP BY
+  1
+ORDER BY
+  1
+#쿼리의 주요 부분은 쿼리 하단(SELECT * from taxitrips)에 있습니다.
+#taxitrips는 학습 기능과 라벨이 포함된 SELECT를 사용하여 뉴욕 데이터세트의 대량 추출을 수행합니다.
+#WHERE는 학습시키고 싶지 않은 데이터를 제거합니다.
+#또한 WHERE에는 데이터의 1/1000만 가져오기 위한 샘플링 절이 포함되어 있습니다.
+#BigQuery에서는 독립적인 EVAL 세트를 빠르게 만들 수 있도록 TRAIN이라는 변수를 정의합니다.
+#total_fare가 우리가 예측하게 될 라벨입니다. tolls_amount 및 fare_amount를 바탕으로 이 필드가 생성됩니다. 모델의 일부인 고객 팁은 임의 항목이므로 무시할 수 있습니다.
+
+모델을 저장할 BigQuery 데이터세트 만들기
+다음으로 ML 모델을 저장할 새 BigQuery 데이터세트를 만듭니다.
+
+리소스 패널에서 프로젝트 이름을 선택합니다.
+
+데이터세트 만들기를 선택합니다.
+
+데이터세트 만들기 대화상자에서 다음을 수행합니다.
+
+데이터세트 ID에 taxi를 입력합니다.
+
+다른 값은 기본값을 유지합니다.
+
+데이터세트 만들기를 클릭합니다.
+
+
+
