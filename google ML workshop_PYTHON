@@ -1,0 +1,227 @@
+Task 1. Prepare your environment
+This lab uses a set of code samples and scripts developed for Data Science on the Google Cloud Platform, 2nd Edition from O'Reilly Media, Inc. For this lab, you clone the sample repository from Github to Cloud Shell and carry out all of the lab tasks from there.
+
+Selecting a training dataset
+Before selecting your training dataset, you must decide on a repeatable mechanism to select a subset of the data as the training dataset, which you use to create predictive models. You use the remaining data in the dataset as the test set, which you use to evaluate the effectiveness of your models.
+
+You also need to provide a representative selection of the data. Possible options:
+
+Add a WHERE clause to select records using BigQuery's RAND() function. Unfortunately that makes it virtually impossible to select an independent evaluation test dataset. Also, the RAND() function returns different results every time it's run, which makes it impossible to compare model performance between different runs.
+
+Select a specific date range, or just the first N records in the table. Unfortunately, you could inadvertently select training data that omits on some date-based variation in the data.
+
+Identify a specific set of dates, each of which is initially chosen at random, as the training dataset. The dates are saved in a separate database table. This allows you to carry out multiple replays of training and test queries in a consistent manner. Best approach.
+
+To identify all of the unique dates in the dataset:
+
+In the Cloud Console, on the Navigation menu (Navigation menu), click BigQuery to open BigQuery console.
+
+In the left panel, notice your project name is the same as the GCP Project ID, for example, qwiklabs-gcp-01-90fdc8ba3e8b. Click to expand your project to see that the dsongcp dataset was imported for you during the lab setup.
+
+Add the following query into the Query editor, then click RUN.
+
+SELECT
+  DISTINCT(FL_DATE) AS FL_DATE
+FROM
+  `dsongcp.flights_tzcorr`
+ORDER BY
+  FL_DATE
+복사되었습니다.
+To randomly select 70% of these dates to be the training days:
+
+Paste the following query into the Query editor and click RUN.
+
+SELECT
+  FL_DATE,
+  IF(ABS(MOD(FARM_FINGERPRINT(CAST(FL_DATE AS STRING)), 100)) < 70,
+     'True', 'False') AS is_train_day
+FROM (
+  SELECT
+    DISTINCT(FL_DATE) AS FL_DATE
+  FROM
+    dsongcp.flights_tzcorr)
+ORDER BY
+  FL_DATE
+LIMIT 5
+복사되었습니다.
+In the preceding query, the hash value of each of the unique days from the inner query is computed using the FarmHash library. The is_train_day field is set to True if the last two digits of this hash value are less than 70.
+
+Paste the following query into the Query editor and click RUN to save this result as a table in BigQuery.
+
+CREATE OR REPLACE TABLE dsongcp.trainday AS
+SELECT
+  FL_DATE,
+  IF(ABS(MOD(FARM_FINGERPRINT(CAST(FL_DATE AS STRING)), 100)) < 70,
+     'True', 'False') AS is_train_day
+FROM (
+  SELECT
+    DISTINCT(FL_DATE) AS FL_DATE
+  FROM
+    dsongcp.flights_tzcorr)
+ORDER BY
+  FL_DATE
+복사되었습니다.
+Click Check my progress below to check your lab progress.
+Create a table
+
+Task 2. Create the model using the Training dataset
+Use Jupyterlab to create the model.
+
+In the Google Cloud Console, on the Navigation Menu, click Vertex AI > Workbench.
+
+On the Notebook instances page, click New Notebook > TensorFlow Enterprise > TensorFlow Enterprise 2.6 (with LTS) > Without GPUs.
+
+In the New notebook instance dialog, confirm the name of the deep learning VM, and then click Create. The new VM will take 2-3 minutes to start.
+
+Click Open JupyterLab. A JupyterLab window will open in a new tab.
+
+Click Check my progress below to check your lab progress.
+Create a notebook instances
+
+Click the Python 3 card under Notebook.
+You use Python 3 code for this Notebook.
+
+Copy and paste the following code into the empty cell to import the necessary modules and initialize a BigQuery client.
+The BigQuery client sends and receives messages from the BigQuery API.
+
+import matplotlib.pyplot as plt
+import seaborn as sns
+import pandas as pd
+import numpy as np
+from google.cloud import bigquery as bq
+복사되었습니다.
+Run the cell by either press Shift + Enter or click the triangle in the top ribbon. Both run the cell and provide the next empty cell.
+
+In the new cell, enter the following code to create a variable with the new BigQuery query using just the training day partition of the dataset:
+
+%%bigquery depdelay
+SELECT
+    DEP_DELAY,
+    APPROX_QUANTILES(ARR_DELAY, 101)[OFFSET(70)] AS arrival_delay,
+    COUNT(ARR_DELAY) AS numflights
+FROM
+    dsongcp.flights_tzcorr
+JOIN dsongcp.trainday USING(FL_DATE)
+WHERE is_train_day = 'True'
+GROUP BY
+    DEP_DELAY
+HAVING numflights > 370
+ORDER BY DEP_DELAY
+복사되었습니다.
+Run the cell.
+
+Enter the following code into the new cell to plot the intersection of the 15 minute delay line with the 30% arrival delay probability line for the training dataset:
+
+ax = plt.axes()
+depdelay.plot(kind='line', x='DEP_DELAY', y='arrival_delay',
+              ax=ax, ylim=(0,30), xlim=(0,30), legend=False)
+ax.set_xlabel('Departure Delay (minutes)')
+ax.set_ylabel('> 30% prob of this Arrival Delay (minutes)');
+x = np.arange(0, 30)
+y = np.ones_like(x) * 15
+ax.plot(x, y, color='r');
+y = np.arange(0, 30)
+x = np.ones_like(y) * 16
+ax.plot(x, y, 'g.');
+복사되었습니다.
+Run the cell.
+Ignore the deprecation warning.
+
+On running it, the threshold (the x-axis value of the intersection point) remains consistent, as depicted in below figure.
+
+Intersection of the 15 minute delay line with the 30% arrival delay probability line
+
+Notice you get the same answer—16 minutes—after creating the empirical probabilistic model on just the training data. This is good.
+
+In the next secion, you test this model against the independent test dataset.
+
+Task 3. Evaluate the data model
+Evaluate how well your recommendation of 16 minutes does in terms of predicting an arrival delay of 15 minutes or more. To do that, find the number of times you would have wrongly canceled a meeting or missed a meeting. Compute these numbers using this Query on days that are not training days to compute these numbers:
+
+Paste the following code into the empty cell:
+
+%%bigquery df_eval
+SELECT
+  SUM(IF(DEP_DELAY < 16
+      AND arr_delay < 15, 1, 0)) AS correct_nocancel,
+  SUM(IF(DEP_DELAY < 16
+      AND arr_delay >= 15, 1, 0)) AS wrong_nocancel,
+  SUM(IF(DEP_DELAY >= 16
+      AND arr_delay < 15, 1, 0)) AS wrong_cancel,
+  SUM(IF(DEP_DELAY >= 16
+      AND arr_delay >= 15, 1, 0)) AS correct_cancel
+FROM (
+  SELECT
+    DEP_DELAY,
+    ARR_DELAY
+  FROM
+    dsongcp.flights_tzcorr
+  JOIN dsongcp.trainday USING(FL_DATE)
+  WHERE is_train_day = 'False' 
+)
+복사되었습니다.
+Run the cell.
+
+Paste the following code into the new empty cell:
+
+print(df_eval['correct_nocancel'] /
+      (df_eval['correct_nocancel'] + df_eval['wrong_nocancel']))
+print(df_eval['correct_cancel'] / 
+      (df_eval['correct_cancel'] + df_eval['wrong_cancel']))
+복사되었습니다.
+Run the cell with Shift + Enter.
+
+Paste the following code into the new empty cell and run the cell.
+
+df_eval.head()
+복사되었습니다.
+This gives the following results:
+
+Table showing cancel nocancel data
+
+Note that this query does not exclude the outlier data. You are evaluating real data against the model to see how well it performs in all situations.
+
+Enter the following code in the new cell to create a query string that captures the contingency table that allows you to score the effectiveness of the model:
+
+%%bigquery df_eval
+SELECT
+  SUM(IF(DEP_DELAY = 15
+      AND arr_delay < 15, 1, 0)) AS correct_nocancel,
+  SUM(IF(DEP_DELAY = 15
+      AND arr_delay >= 15, 1, 0)) AS wrong_nocancel,
+  SUM(IF(DEP_DELAY = 16
+      AND arr_delay < 15, 1, 0)) AS wrong_cancel,
+  SUM(IF(DEP_DELAY = 16
+      AND arr_delay >= 15, 1, 0)) AS correct_cancel
+FROM (
+  SELECT
+    DEP_DELAY,
+    ARR_DELAY
+  FROM
+    dsongcp.flights_tzcorr
+  JOIN dsongcp.trainday USING(FL_DATE)
+  WHERE is_train_day = 'False' 
+)
+복사되었습니다.
+Run the cell. Now enter and run the following cell:
+
+df_eval.head()
+복사되었습니다.
+Cell Output
+
+Now enter the following code to display the ratio of correct to incorrect calls for the full evaluation dataset:
+
+print(df_eval['correct_nocancel'] / (df_eval['correct_nocancel'] + df_eval['wrong_nocancel']))
+print(df_eval['correct_cancel'] / (df_eval['correct_cancel'] + df_eval['wrong_cancel']))
+복사되었습니다.
+Run the cell.
+This reports the following:
+
+Cell Output
+
+Click Check my progress below to check your lab progress.
+Evaluating the data model
+
+As expected, you are correct to not cancel the meeting 72% of the time, close to our target of 70%. You chose the departure delay threshold of 16 minutes on the training dataset because you expected to be 70% correct in not canceling if you do so, you now proved on an independent dataset that this is the case.
+
+This model achieves the 70% correctness measure that was our target but does so by canceling fewer flights than the contingency-table-based model of Chapter 3.X
